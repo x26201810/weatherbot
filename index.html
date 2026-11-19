@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weather bot</title>
+<style>
+  body{margin:0;font:17px/1.5 system-ui,-apple-system,sans-serif;background:#0b0d2a;color:#f2efe6}
+  main{max-width:640px;margin:0 auto;padding:24px}
+  h1{font:600 26px Georgia,serif;margin:0 0 4px}
+  .sub{color:#a9a7b8;margin:0 0 18px}
+  #chat{display:flex;flex-direction:column;gap:10px;min-height:200px}
+  .m{padding:10px 14px;border-radius:14px;max-width:85%}
+  .me{align-self:flex-end;background:#2b3a8f}
+  .bot{align-self:flex-start;background:#1a1d44;border:1px solid #3b3f78}
+  form{display:flex;gap:8px;margin-top:16px}
+  input{flex:1;padding:12px;border-radius:10px;border:1px solid #3b3f78;background:#12153a;color:#fff;font:inherit}
+  button{padding:12px 16px;border-radius:10px;border:0;background:#e3c878;color:#1a1405;font-weight:700;cursor:pointer}
+  details{margin-top:22px;padding:12px 14px;border-radius:12px;background:#12153a;border:1px solid #3b3f78}
+  summary{cursor:pointer;font-weight:600}
+  .row{display:flex;gap:8px;margin-top:10px}
+  .ghost{background:transparent;color:#e3c878;border:1px solid #e3c878}
+  #keyState{font-size:14px;color:#a9a7b8;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Weather bot</h1>
+  <p class="sub">Live Dublin forecast (Open-Meteo) + Gemini, on your own free key.</p>
+  <div id="chat"></div>
+  <form id="ask"><input id="q" placeholder="Should I cycle home at six?" autocomplete="off"><button>Ask</button></form>
+  <details id="settings"><summary>Settings: your Gemini key</summary>
+    <div class="row"><input id="key" type="password" placeholder="Paste your Gemini API key"><button type="button" id="save">Save</button><button type="button" class="ghost" id="forget">Forget key</button></div>
+    <div id="keyState"></div>
+  </details>
+</main>
+<script>
+// The key lives only in this browser (localStorage). It is never written into this file.
+const MODELS = ["gemini-3.5-flash-lite", "gemini-2.5-flash"]; // free-tier models, first choice first
+const FORECAST = "https://api.open-meteo.com/v1/forecast?latitude=53.35&longitude=-6.26&hourly=temperature_2m,precipitation_probability,wind_speed_10m&forecast_days=2&timezone=Europe%2FDublin";
+const $ = id => document.getElementById(id);
+function say(text, who){ const d = document.createElement("div"); d.className = "m " + who; d.textContent = text; $("chat").appendChild(d); return d; }
+function showKeyState(){ $("keyState").textContent = localStorage.getItem("geminiKey") ? "A key is saved in this browser." : "No key saved yet."; }
+$("save").onclick = () => { const k = $("key").value.trim(); if (k) { localStorage.setItem("geminiKey", k); $("key").value = ""; } showKeyState(); };
+$("forget").onclick = () => { localStorage.removeItem("geminiKey"); showKeyState(); };
+showKeyState();
+
+// Ask Gemini. Google is moving between two ways of calling it, so this tries each in turn.
+async function askGemini(key, prompt){
+  const base = "https://generativelanguage.googleapis.com/v1beta/";
+  const classic = { contents: [{ parts: [{ text: prompt }] }] };
+  let last = "No reply from Gemini.";
+  for (const m of MODELS) {
+    const routes = [
+      [base + "models/" + m + ":generateContent", { "x-goog-api-key": key }, classic],
+      [base + "models/" + m + ":generateContent?key=" + encodeURIComponent(key), {}, classic],
+      [base + "interactions", { "x-goog-api-key": key }, { model: m, input: prompt }]
+    ];
+    for (const [url, extra, body] of routes) {
+      const r = await fetch(url, { method: "POST", headers: Object.assign({ "Content-Type": "application/json" }, extra), body: JSON.stringify(body) });
+      let d = {}; try { d = JSON.parse(await r.text()); } catch (e) {}
+      if (Array.isArray(d)) d = d[0] || {};
+      if (r.ok) {
+        const texts = [];
+        (function walk(x, k){ if (typeof x === "string") { if (k === "text") texts.push(x); return; } if (x && typeof x === "object") for (const kk in x) walk(x[kk], kk); })(d.candidates || d.outputs || d.steps || d);
+        return { text: d.output_text || texts.join("").trim() || "(empty reply)", route: m + " · " + (url.includes("interactions") ? "interactions" : "generateContent") };
+      }
+      last = r.status + " " + ((d.error && d.error.status) || "") + ": " + ((d.error && d.error.message) || "no details");
+      if (r.status === 429 || r.status === 403 || (r.status === 400 && /api key/i.test(last))) throw new Error(last);
+    }
+  }
+  throw new Error(last);
+}
+
+$("ask").onsubmit = async e => {
+  e.preventDefault();
+  const q = $("q").value.trim(); if (!q) return;
+  const key = localStorage.getItem("geminiKey");
+  if (!key) { $("settings").open = true; say("Paste your Gemini key in Settings first.", "bot"); return; }
+  say(q, "me"); $("q").value = "";
+  const wait = say("Checking the forecast...", "bot");
+  try {
+    // 1. The facts: public data, no key needed
+    const f = await (await fetch(FORECAST)).json();
+    const h = f.hourly, rows = h.time.slice(0, 36).map((t, i) => `${t} temp ${h.temperature_2m[i]}C rain ${h.precipitation_probability[i]}% wind ${h.wind_speed_10m[i]}km/h`).join("\n");
+    // 2. The brain: question + rows, with your key
+    wait.textContent = "Asking Gemini...";
+    const a = await askGemini(key,
+      "You are a weather assistant for Dublin. Use only the hourly forecast below (local time). " +
+      "Answer in two sentences and say which numbers you used.\n\nForecast:\n" + rows + "\n\nQuestion: " + q);
+    wait.textContent = a.text;
+  } catch (err) {
+    wait.textContent = "Error: " + err.message;
+  }
+};
+</script>
+</body>
+</html>
