@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Weather bot</title>
+<title>Money bot</title>
 <style>
   body{margin:0;font:17px/1.5 system-ui,-apple-system,sans-serif;background:#0b0d2a;color:#f2efe6}
   main{max-width:640px;margin:0 auto;padding:24px}
@@ -25,10 +25,10 @@
 </head>
 <body>
 <main>
-  <h1>Weather bot</h1>
-  <p class="sub">Live Dublin forecast (Open-Meteo) + Gemini, on your own free key.</p>
+  <h1>Money bot</h1>
+  <p class="sub">Live euro exchange rates (ECB via Frankfurter) + Gemini, on your own free key.</p>
   <div id="chat"></div>
-  <form id="ask"><input id="q" placeholder="Should I cycle home at six?" autocomplete="off"><button>Ask</button></form>
+  <form id="ask"><input id="q" placeholder="How many dollars would €500 get me today?" autocomplete="off"><button>Ask</button></form>
   <details id="settings"><summary>Settings: your Gemini key</summary>
     <div class="row"><input id="key" type="password" placeholder="Paste your Gemini API key"><button type="button" id="save">Save</button><button type="button" class="ghost" id="forget">Forget key</button></div>
     <div id="keyState"></div>
@@ -37,7 +37,7 @@
 <script>
 // The key lives only in this browser (localStorage). It is never written into this file.
 const MODELS = ["gemini-3.5-flash-lite", "gemini-2.5-flash"]; // free-tier models, first choice first
-const FORECAST = "https://api.open-meteo.com/v1/forecast?latitude=53.35&longitude=-6.26&hourly=temperature_2m,precipitation_probability,wind_speed_10m&forecast_days=2&timezone=Europe%2FDublin";
+const MONEY = "https://api.frankfurter.dev/v1/latest?base=EUR"; // latest ECB reference rates, 1 EUR = x
 const $ = id => document.getElementById(id);
 function say(text, who){ const d = document.createElement("div"); d.className = "m " + who; d.textContent = text; $("chat").appendChild(d); return d; }
 function showKeyState(){ $("keyState").textContent = localStorage.getItem("geminiKey") ? "A key is saved in this browser." : "No key saved yet."; }
@@ -78,16 +78,19 @@ $("ask").onsubmit = async e => {
   const key = localStorage.getItem("geminiKey");
   if (!key) { $("settings").open = true; say("Paste your Gemini key in Settings first.", "bot"); return; }
   say(q, "me"); $("q").value = "";
-  const wait = say("Checking the forecast...", "bot");
+  const wait = say("Fetching exchange rates...", "bot");
   try {
     // 1. The facts: public data, no key needed
-    const f = await (await fetch(FORECAST)).json();
-    const h = f.hourly, rows = h.time.slice(0, 36).map((t, i) => `${t} temp ${h.temperature_2m[i]}C rain ${h.precipitation_probability[i]}% wind ${h.wind_speed_10m[i]}km/h`).join("\n");
+    const r = await fetch(MONEY);
+    if (!r.ok) throw new Error("Rates feed returned " + r.status);
+    const f = await r.json();
+    const rows = `Rates dated ${f.date}, base ${f.base}:\n` + Object.entries(f.rates || {}).map(([c, v]) => `${c} ${v}`).join("\n");
+    if (!f.rates || !Object.keys(f.rates).length) throw new Error("No rates came back.");
     // 2. The brain: question + rows, with your key
     wait.textContent = "Asking Gemini...";
     const a = await askGemini(key,
-      "You are a weather assistant for Dublin. Use only the hourly forecast below (local time). " +
-      "Answer in two sentences and say which numbers you used.\n\nForecast:\n" + rows + "\n\nQuestion: " + q);
+      "You are a financial data assistant. Use only the latest ECB reference rates below (1 EUR = x of each currency). " +
+      "Answer in two sentences and say which numbers you used. You are not a financial adviser: describe the rates, don't tell the user what to buy or sell.\n\nRates:\n" + rows + "\n\nQuestion: " + q);
     wait.textContent = a.text;
   } catch (err) {
     wait.textContent = "Error: " + err.message;
