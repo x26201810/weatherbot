@@ -40,8 +40,9 @@ const MODELS = ["gemini-3.5-flash-lite", "gemini-2.5-flash"]; // free-tier model
 const MONEY = "https://api.frankfurter.dev/v1/latest?base=EUR"; // latest ECB reference rates, 1 EUR = x
 const $ = id => document.getElementById(id);
 function say(text, who){ const d = document.createElement("div"); d.className = "m " + who; d.textContent = text; $("chat").appendChild(d); return d; }
+const cleanKey = k => (k || "").replace(/[^A-Za-z0-9_-]/g, ""); // drops hidden spaces/quotes picked up when copying
 function showKeyState(){ $("keyState").textContent = localStorage.getItem("geminiKey") ? "A key is saved in this browser." : "No key saved yet."; }
-$("save").onclick = () => { const k = $("key").value.trim(); if (k) { localStorage.setItem("geminiKey", k); $("key").value = ""; } showKeyState(); };
+$("save").onclick = () => { const k = cleanKey($("key").value); if (k) { localStorage.setItem("geminiKey", k); $("key").value = ""; } showKeyState(); };
 $("forget").onclick = () => { localStorage.removeItem("geminiKey"); showKeyState(); };
 showKeyState();
 
@@ -75,7 +76,7 @@ async function askGemini(key, prompt){
 $("ask").onsubmit = async e => {
   e.preventDefault();
   const q = $("q").value.trim(); if (!q) return;
-  const key = localStorage.getItem("geminiKey");
+  const key = cleanKey(localStorage.getItem("geminiKey"));
   if (!key) { $("settings").open = true; say("Paste your Gemini key in Settings first.", "bot"); return; }
   say(q, "me"); $("q").value = "";
   const wait = say("Fetching exchange rates...", "bot");
